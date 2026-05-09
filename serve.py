@@ -80,25 +80,37 @@ def _autodetect_neutral_font() -> Optional[Path]:
     if not fonts_dir.exists():
         return None
     preferred = ["NotoSans-Regular", "Roboto-Regular", "OpenSans-Regular", "DejaVuSans"]
-    candidates = list(fonts_dir.glob("*.ttf")) + list(fonts_dir.glob("*.otf"))
+    candidates = sorted(list(fonts_dir.glob("*.ttf")) + list(fonts_dir.glob("*.otf")))
     for keyword in preferred:
         for c in candidates:
             if keyword.lower() in c.name.lower():
                 return c
-    return candidates[0] if candidates else None
+    for c in candidates:
+        try:
+            ImageFont.truetype(str(c), FONT_SIZE)
+            return c
+        except OSError:
+            continue
+    return None
 
 
 def render_neutral_glyph(ch: str) -> Image.Image:
     """Render `ch` in the neutral content font, returning a 128x128 grayscale PIL."""
     global _neutral_pil_font
     if _neutral_pil_font is None:
-        font_file = NEUTRAL_FONT_FILE if NEUTRAL_FONT_FILE.exists() else _autodetect_neutral_font()
+        font_file = NEUTRAL_FONT_FILE if NEUTRAL_FONT_FILE.is_file() else _autodetect_neutral_font()
         if font_file is None:
             raise HTTPException(
                 status_code=503,
                 detail="No neutral content font available. Set NEUTRAL_FONT_FILE env var.",
             )
-        _neutral_pil_font = ImageFont.truetype(str(font_file), FONT_SIZE)
+        try:
+            _neutral_pil_font = ImageFont.truetype(str(font_file), FONT_SIZE)
+        except OSError as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Cannot open neutral font {font_file}: {e}",
+            )
 
     img = Image.new("L", (IMAGE_SIZE, IMAGE_SIZE), color=255)
     draw = ImageDraw.Draw(img)
