@@ -1,0 +1,8 @@
+torch>=2.0
+torchvision>=0.15
+Pillow
+tqdm
+requests
+fastapi
+uvicorn[standard]
+python-multipart
