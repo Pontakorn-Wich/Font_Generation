@@ -1,3 +1,13 @@
+"""Dataset for few-shot font style transfer.
+
+Each sample yields:
+    content_image   the target character rendered in some (content) font
+    style_images    K reference characters rendered in the target font
+    target_image    the target character rendered in the target font (gt)
+    target_font_id  integer label for the target font (aux classification)
+    char_id         integer label for the character (aux classification)
+"""
+
 from __future__ import annotations
 
 import csv
@@ -13,39 +23,32 @@ from torchvision import transforms
 
 
 def load_index(labels_csv: Path) -> Tuple[Dict[str, Dict[str, str]], Dict[str, Set[str]]]:
-    """Build (font -> char -> path) and (char -> {fonts}) indices from labels.csv."""
+    """(font -> char -> path) and (char -> {fonts}) maps."""
     font_to_char_to_path: Dict[str, Dict[str, str]] = defaultdict(dict)
     char_to_fonts: Dict[str, Set[str]] = defaultdict(set)
     with Path(labels_csv).open(newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             font = row["font_name"]
             ch = row["label_character"]
-            path = row["picture_path"]
-            font_to_char_to_path[font][ch] = path
+            font_to_char_to_path[font][ch] = row["picture_path"]
             char_to_fonts[ch].add(font)
     return font_to_char_to_path, char_to_fonts
 
 
 class FontPairDataset(Dataset):
-    """Few-shot font style transfer dataset.
-
-    Each item yields:
-      content_image   target character rendered in some other (content) font
-      style_images    K reference characters rendered in the target font
-      target_image    target character rendered in the target font (ground truth)
-    """
-
     def __init__(
         self,
         labels_csv: str | Path,
         image_size: int = 128,
         k_style: int = 4,
         min_chars_per_font: int = 5,
+        augment: bool = True,
         seed: int | None = None,
     ) -> None:
         self.labels_csv = Path(labels_csv)
         self.image_size = image_size
         self.k_style = k_style
+        self.augment = augment
 
         font_to_char_to_path, char_to_fonts = load_index(self.labels_csv)
 
@@ -59,6 +62,12 @@ class FontPairDataset(Dataset):
             for ch, fonts in char_to_fonts.items()
         }
 
+        # Build label vocabularies (deterministic ordering for reproducibility)
+        self.fonts: List[str] = sorted(self.font_to_char_to_path.keys())
+        self.chars: List[str] = sorted({c for chars in self.font_to_char_to_path.values() for c in chars})
+        self.font_to_id: Dict[str, int] = {f: i for i, f in enumerate(self.fonts)}
+        self.char_to_id: Dict[str, int] = {c: i for i, c in enumerate(self.chars)}
+
         self.samples: List[Tuple[str, str]] = [
             (font, ch)
             for font, chars in self.font_to_char_to_path.items()
@@ -66,9 +75,26 @@ class FontPairDataset(Dataset):
             if len(self.char_to_fonts.get(ch, ())) >= 2
         ]
 
-        self.transform = transforms.Compose(
+        # Resize + grayscale + tanh-range normalisation
+        self.base_transform = transforms.Compose(
             [
                 transforms.Resize((image_size, image_size)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5], std=[0.5]),
+            ]
+        )
+        # Light augmentation applied ONLY to the content image so the model
+        # learns to be robust to position/scale jitter when the user supplies
+        # imperfect content. Target and style refs are never augmented.
+        self.content_aug = transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size)),
+                transforms.RandomAffine(
+                    degrees=3,
+                    translate=(0.05, 0.05),
+                    scale=(0.93, 1.07),
+                    fill=255,
+                ),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5], std=[0.5]),
             ]
@@ -76,11 +102,21 @@ class FontPairDataset(Dataset):
 
         self._rng = random.Random(seed)
 
+    @property
+    def n_fonts(self) -> int:
+        return len(self.fonts)
+
+    @property
+    def n_chars(self) -> int:
+        return len(self.chars)
+
     def __len__(self) -> int:
         return len(self.samples)
 
-    def _load(self, path: str) -> torch.Tensor:
-        return self.transform(Image.open(path).convert("L"))
+    def _load(self, path: str, augment: bool = False) -> torch.Tensor:
+        img = Image.open(path).convert("L")
+        t = self.content_aug if (augment and self.augment) else self.base_transform
+        return t(img)
 
     def __getitem__(self, idx: int) -> Dict[str, object]:
         target_font, content_char = self.samples[idx]
@@ -106,9 +142,11 @@ class FontPairDataset(Dataset):
         style_paths = [self.font_to_char_to_path[target_font][c] for c in style_chars]
 
         return {
-            "content_image": self._load(content_path),
+            "content_image": self._load(content_path, augment=True),
             "style_images": torch.stack([self._load(p) for p in style_paths], dim=0),
             "target_image": self._load(target_path),
+            "target_font_id": torch.tensor(self.font_to_id[target_font], dtype=torch.long),
+            "char_id": torch.tensor(self.char_to_id[content_char], dtype=torch.long),
             "content_char": content_char,
             "target_font": target_font,
             "content_font": content_font,

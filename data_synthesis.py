@@ -4,8 +4,9 @@ import argparse
 import csv
 import itertools
 import os
+import shutil
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -87,23 +88,52 @@ def render_character_images(
     chars: str,
     image_size: int = 128,
     font_size: int = 96,
-) -> Dict[str, int]:
+    cleanup: bool = True,
+    min_chars_per_font: Optional[int] = None,
+) -> Dict[str, object]:
+    """Render every (font, char) pair.
+
+    With ``cleanup=True``:
+      A) fonts that PIL cannot load           → .ttf deleted
+      B+C) fonts rendering fewer than          → .ttf + image folder deleted
+           ``min_chars_per_font`` glyphs
+           (defaults to len(chars) — strict)
+
+    Returns rich stats including which fonts were removed.
+    """
     image_dir.mkdir(parents=True, exist_ok=True)
+
+    if min_chars_per_font is None:
+        min_chars_per_font = len(chars)
 
     rows: List[Dict[str, str]] = []
     index_by_char: Dict[str, List[Dict[str, str]]] = {}
+    failed_pil_load: List[Dict[str, str]] = []      # case A: PIL truetype raised
+    deleted_ttf_pil_fail: List[str] = []            # case A: ttf removed
+    deleted_incomplete: List[Dict[str, object]] = []  # case B+C: ttf + dir removed
+    glyphs_per_font: Dict[str, int] = {}
+    font_to_path: Dict[str, Path] = {}
 
     font_files = sorted(list(font_dir.glob("*.ttf")) + list(font_dir.glob("*.otf")))
 
     for font_path in tqdm(font_files, desc="Rendering"):
         font_name = safe_name(font_path.stem)
+        font_to_path[font_name] = font_path
         try:
             font = ImageFont.truetype(str(font_path), font_size)
-        except Exception:
+        except Exception as e:
+            failed_pil_load.append({"file": font_path.name, "error": str(e)[:80]})
+            if cleanup:
+                try:
+                    font_path.unlink()
+                    deleted_ttf_pil_fail.append(font_path.name)
+                except OSError:
+                    pass
             continue
 
         font_out_dir = image_dir / font_name
         font_out_dir.mkdir(parents=True, exist_ok=True)
+        rendered_here = 0
 
         for ch in chars:
             if not glyph_exists(font, ch):
@@ -126,6 +156,7 @@ def render_character_images(
             code = f"U+{ord(ch):04X}"
             image_path = font_out_dir / f"{code}.png"
             img.save(image_path)
+            rendered_here += 1
 
             rel_path = image_path.as_posix()
             row = {
@@ -135,6 +166,37 @@ def render_character_images(
             }
             rows.append(row)
             index_by_char.setdefault(ch, []).append(row)
+
+        glyphs_per_font[font_name] = rendered_here
+
+    # === Strict cleanup: remove fonts that rendered fewer than min_chars_per_font ===
+    if cleanup:
+        bad = set()
+        for font_name, count in list(glyphs_per_font.items()):
+            if count < min_chars_per_font:
+                out_dir = image_dir / font_name
+                if out_dir.exists():
+                    shutil.rmtree(out_dir, ignore_errors=True)
+                ttf = font_to_path.get(font_name)
+                if ttf is not None and ttf.exists():
+                    try:
+                        ttf.unlink()
+                    except OSError:
+                        pass
+                deleted_incomplete.append({
+                    "font": font_name,
+                    "rendered": count,
+                    "required": min_chars_per_font,
+                })
+                bad.add(font_name)
+        if bad:
+            rows = [r for r in rows if r["font_name"] not in bad]
+            for ch in list(index_by_char.keys()):
+                index_by_char[ch] = [r for r in index_by_char[ch] if r["font_name"] not in bad]
+                if not index_by_char[ch]:
+                    del index_by_char[ch]
+            for name in bad:
+                glyphs_per_font.pop(name, None)
 
     labels_csv_path.parent.mkdir(parents=True, exist_ok=True)
     with labels_csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -170,9 +232,15 @@ def render_character_images(
         writer.writerows(mapping_rows)
 
     return {
-        "font_files": len(font_files),
+        "font_files_scanned": len(font_files),
+        "complete_fonts": len(glyphs_per_font),
         "labels_rows": len(rows),
         "mapping_rows": len(mapping_rows),
+        "required_glyphs": min_chars_per_font,
+        "failed_pil_load": failed_pil_load,
+        "deleted_ttf_pil_fail": deleted_ttf_pil_fail,
+        "deleted_incomplete": deleted_incomplete,
+        "glyphs_per_font": glyphs_per_font,
     }
 
 
@@ -182,7 +250,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--chars",
         type=str,
-        default="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+        default="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
         help="Characters to render",
     )
     parser.add_argument("--image-size", type=int, default=128, help="Output image size")
@@ -225,9 +293,19 @@ def main() -> None:
     )
 
     print("Synthesis completed.")
-    print(f"Font files scanned: {stats['font_files']}")
-    print(f"Rows in labels.csv: {stats['labels_rows']}")
-    print(f"Rows in char_mapping.csv: {stats['mapping_rows']}")
+    print(f"Font files scanned   : {stats['font_files_scanned']}")
+    print(f"Complete fonts kept  : {stats['complete_fonts']}  (required {stats['required_glyphs']} glyphs each)")
+    print(f"Rows in labels.csv   : {stats['labels_rows']}")
+    print(f"Rows in mapping.csv  : {stats['mapping_rows']}")
+    if stats["deleted_ttf_pil_fail"]:
+        print(f"\nDeleted {len(stats['deleted_ttf_pil_fail'])} font(s) PIL could not load:")
+        for name in stats["deleted_ttf_pil_fail"]:
+            print(f"  - {name}")
+    if stats["deleted_incomplete"]:
+        print(f"\nDeleted {len(stats['deleted_incomplete'])} incomplete font(s) "
+              f"(< {stats['required_glyphs']} glyphs):")
+        for x in sorted(stats["deleted_incomplete"], key=lambda d: d["rendered"]):
+            print(f"  - {x['font']}  ({x['rendered']}/{x['required']} glyphs)")
 
 
 if __name__ == "__main__":
