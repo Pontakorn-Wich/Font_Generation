@@ -49,13 +49,15 @@ def list_google_font_paths(session: requests.Session) -> List[str]:
     return out
 
 
-def download_google_fonts(font_dir: Path) -> int:
+def download_google_fonts(font_dir: Path, max_fonts: int = 0) -> int:
     font_dir.mkdir(parents=True, exist_ok=True)
     downloaded = 0
 
     with requests.Session() as session:
         session.headers.update(github_headers())
         paths = list_google_font_paths(session)
+        if max_fonts > 0:
+            paths = paths[:max_fonts]
         for path in tqdm(paths, desc="Downloading fonts"):
             output_path = font_dir / path.replace("/", "_")
             if output_path.exists():
@@ -190,6 +192,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip downloading fonts and only render using existing font files",
     )
+    parser.add_argument(
+        "--max-fonts",
+        type=int,
+        default=0,
+        help="Limit number of fonts to download (0 = all). Useful for quick smoke tests.",
+    )
     return parser.parse_args()
 
 
@@ -203,7 +211,7 @@ def main() -> None:
     mapping_csv = root / "data" / "char_mapping.csv"
 
     if not args.skip_download:
-        downloaded = download_google_fonts(font_dir)
+        downloaded = download_google_fonts(font_dir, max_fonts=args.max_fonts)
         print(f"Downloaded {downloaded} new font files into {font_dir}")
 
     stats = render_character_images(
