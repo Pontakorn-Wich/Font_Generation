@@ -29,7 +29,7 @@ from models import Generator
 CHECKPOINT_PATH = Path(os.getenv("CHECKPOINT_PATH", "runs/exp1/ckpt/latest.pt"))
 IMAGE_SIZE = int(os.getenv("IMAGE_SIZE", "128"))
 FONT_SIZE = int(os.getenv("FONT_SIZE", "96"))
-STYLE_DIM = int(os.getenv("STYLE_DIM", "128"))
+STYLE_DIM = int(os.getenv("STYLE_DIM", "256"))
 DEVICE = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 
 # A pre-rendered "neutral" font used as content source when the client
@@ -69,7 +69,8 @@ def get_generator() -> Generator:
             )
         g = Generator(image_channels=1, style_dim=STYLE_DIM).to(DEVICE)
         state = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
-        g.load_state_dict(state["G"])
+        # Prefer EMA weights for inference quality, fall back to raw G.
+        g.load_state_dict(state.get("G_ema", state["G"]))
         g.eval()
         _generator = g
     return _generator
@@ -171,7 +172,7 @@ async def transfer(
     style_batch = torch.stack(style_tensors, dim=0).unsqueeze(0).to(DEVICE)
 
     with torch.no_grad():
-        style_code = G.style_encoder(style_batch)
+        style_code = G.encode_style(style_batch)
 
     results: List[dict] = []
 
@@ -179,7 +180,7 @@ async def transfer(
         for f in content_files:
             content_tensor = _decode_upload(await f.read()).unsqueeze(0).to(DEVICE)
             with torch.no_grad():
-                fake = G.decode(G.content_encoder(content_tensor), style_code)
+                fake = G.decode(G.encode_content(content_tensor), style_code)
             results.append(
                 {
                     "label": f.filename,
@@ -193,7 +194,7 @@ async def transfer(
         content_pil = render_neutral_glyph(ch)
         content_tensor = _pil_to_tensor(content_pil).unsqueeze(0).to(DEVICE)
         with torch.no_grad():
-            fake = G.decode(G.content_encoder(content_tensor), style_code)
+            fake = G.decode(G.encode_content(content_tensor), style_code)
         results.append(
             {
                 "label": ch,
