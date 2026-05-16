@@ -30,6 +30,7 @@ depth that the reasoning, not just the recipe, is documented.
 11. [Colab notebook](#11-colab-notebook)
 12. [Inference and serving](#12-inference-and-serving)
 13. [Troubleshooting](#13-troubleshooting)
+14. [References](#14-references)
 
 ---
 
@@ -1123,3 +1124,96 @@ to this server (set via `BACKEND_URL` in `.env.local`).
 If something else fails, inspect `data/synthesis_report.json` and the
 in-flight progress bar metrics — the loss components are individually
 readable (`adv`, `vgg`, `rec`, `con`, `d`).
+
+---
+
+## 14. References
+
+### Few-shot font / image style transfer
+
+[liu2019funit] Liu, M.-Y., Huang, X., Mallya, A., Karras, T., Laine, S., Lehtinen, J., & Kautz, J. (2019). **Few-Shot Unsupervised Image-to-Image Translation.** ICCV 2019.
+*Used for: main architecture — content encoder + style encoder + AdaIN decoder; few-shot generalization framework.*
+
+[xie2021dgfont] Xie, Y., Yao, X., Sun, J., & Lian, Z. (2021). **DG-Font: Deformable Generative Networks for Unsupervised Font Generation.** CVPR 2021.
+*Used for: content/style disentanglement for font generation; AdaIN modulation.*
+
+[park2021mxfont] Park, S.-E., Chun, S., Oh, J. H., Jang, B., & Han, J. (2021). **Multiple Heads Are Better than One: Few-shot Font Generation with Multiple Localized Experts.** ICCV 2021.
+*Used for: style encoder with multiple localized experts; attention aggregation over reference characters.*
+
+[kong2022cgggan] Kong, L. & Lian, Z. (2022). **Look Closer to Supervise Better: One-Shot Font Generation via Component-Based Discriminator.** CVPR 2022.
+*Used for: auxiliary component classifier in discriminator (component-aware supervision).*
+
+[yang2024fontdiffuser] Yang, Z., Xu, D., & Lian, Z. (2024). **FontDiffuser: One-Shot Font Generation via Denoising Diffusion with Multi-Scale Content Aggregation and Style Contrastive Learning.** AAAI 2024.
+*Used for: SOTA diffusion-based font generation — cited for comparison.*
+
+### U-Net / skip connections
+
+[ronneberger2015unet] Ronneberger, O., Fischer, P., & Brox, T. (2015). **U-Net: Convolutional Networks for Biomedical Image Segmentation.** MICCAI 2015.
+*Used for: encoder-decoder with skip connections at every scale; prevents content collapse in generator bottleneck.*
+
+[isola2017pix2pix] Isola, P., Zhu, J.-Y., Zhou, T., & Efros, A. A. (2017). **Image-to-Image Translation with Conditional Adversarial Networks.** CVPR 2017.
+*Used for: U-Net applied to image-to-image translation; PatchGAN discriminator trunk.*
+
+### Adaptive Instance Normalisation (AdaIN)
+
+[huang2017adain] Huang, X. & Belongie, S. (2017). **Arbitrary Style Transfer in Real-Time with Adaptive Instance Normalization.** ICCV 2017.
+*Used for: AdaIN operator — instance-normalize activations then affine-transform via style code (γ, β).*
+
+[huang2018munit] Huang, X., Liu, M.-Y., Belongie, S., & Kautz, J. (2018). **Multimodal Unsupervised Image-to-Image Translation.** ECCV 2018.
+*Used for: AdaIN in image-to-image translation; content/style latent space decomposition.*
+
+[karras2019stylegan] Karras, T., Laine, S., & Aila, T. (2019). **A Style-Based Generator Architecture for Generative Adversarial Networks.** CVPR 2019.
+*Used for: AdaIN modulation injected at every resolution; style mixing regularization.*
+
+### Style encoder — CLS token + self-attention
+
+[dosovitskiy2021vit] Dosovitskiy, A., Beyer, L., Kolesnikov, A., et al. (2021). **An Image is Worth 16×16 Words: Transformers for Image Recognition at Scale.** ICLR 2021.
+*Used for: [CLS] token + self-attention as aggregate pooling for the reference-set style encoder.*
+
+[lee2019settransformer] Lee, J., Lee, Y., Kim, J., Kosiorek, A. R., Choi, S., & Teh, Y. W. (2019). **Set Transformer: A Framework for Attention-based Permutation-Invariant Neural Networks.** ICML 2019.
+*Used for: permutation-invariant aggregation of K reference images via attention.*
+
+[devlin2019bert] Devlin, J., Chang, M.-W., Lee, K., & Toutanova, K. (2019). **BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding.** NAACL-HLT 2019.
+*Used for: [CLS] token as sequence aggregate — origin of the pattern used in the style encoder.*
+
+### Multi-task discriminator / auxiliary classifiers
+
+[odena2017acgan] Odena, A., Olah, C., & Shlens, J. (2017). **Conditional Image Synthesis with Auxiliary Classifier GANs.** ICML 2017.
+*Used for: auxiliary classifier head in discriminator.*
+
+[choi2018stargan] Choi, Y., Choi, M., Kim, M., Ha, J.-W., Kim, S., & Choo, J. (2018). **StarGAN: Unified Generative Adversarial Networks for Multi-Domain Image-to-Image Translation.** CVPR 2018.
+*Used for: multi-domain classifier in discriminator.*
+
+[miyato2018spectralnorm] Miyato, T., Kataoka, T., Koyama, M., & Yoshida, Y. (2018). **Spectral Normalization for Generative Adversarial Networks.** ICLR 2018.
+*Used for: Lipschitz regularization of discriminator via spectral norm.*
+
+### Perceptual loss
+
+[gatys2016styletransfer] Gatys, L. A., Ecker, A. S., & Bethge, M. (2016). **Image Style Transfer Using Convolutional Neural Networks.** CVPR 2016.
+*Used for: VGG features for style/content matching — conceptual basis for perceptual loss.*
+
+[johnson2016perceptual] Johnson, J., Alahi, A., & Fei-Fei, L. (2016). **Perceptual Losses for Real-Time Style Transfer and Super-Resolution.** ECCV 2016.
+*Used for: L1 on VGG feature maps as training loss — direct implementation used in this project.*
+
+[zhang2018lpips] Zhang, R., Isola, P., Efros, A. A., Shechtman, E., & Wang, O. (2018). **The Unreasonable Effectiveness of Deep Features as a Perceptual Metric.** CVPR 2018.
+*Used for: LPIPS — validates VGG perceptual loss as human-aligned metric.*
+
+### Training stability
+
+[lim2017geometricgan] Lim, J. H. & Ye, J. C. (2017). **Geometric GAN.** arXiv:1705.02894.
+*Used for: hinge adversarial loss.*
+
+[mescheder2018r1] Mescheder, L., Geiger, A., & Nowozin, S. (2018). **Which Training Methods for GANs do actually Converge?** ICML 2018.
+*Used for: R1 gradient penalty on real samples — gradient norm regularization for D.*
+
+[karras2020stylegan2] Karras, T., Laine, S., Aittala, M., Hellsten, J., Lehtinen, J., & Aila, T. (2020). **Analyzing and Improving the Image Quality of StyleGAN.** CVPR 2020.
+*Used for: lazy R1 regularization (every 16 steps); EMA generator weights; Adam β=(0, 0.99).*
+
+[heusel2017ttur] Heusel, M., Ramsauer, H., Unterthiner, T., Nessler, B., & Hochreiter, S. (2017). **GANs Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium.** NeurIPS 2017.
+*Used for: TTUR — discriminator learning rate higher than generator learning rate.*
+
+[tarvainen2017meanteacher] Tarvainen, A. & Valpola, H. (2017). **Mean Teachers Are Better Role Models: Weight-Averaged Consistency Targets Improve Semi-Supervised Deep Learning Results.** NeurIPS 2017.
+*Used for: EMA weight averaging concept applied to generator.*
+
+[micikevicius2018mixedprecision] Micikevicius, P., Narang, S., Alben, J., et al. (2018). **Mixed Precision Training.** ICLR 2018.
+*Used for: bf16 autocast for training efficiency.*
