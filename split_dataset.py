@@ -28,10 +28,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir", type=str, default="",
                    help="Directory for output splits (default: same as labels-csv)")
     p.add_argument("--val-fonts", type=int, default=50,
-                   help="Number of held-out fonts (random per --seed)")
+                   help="Number of held-out fonts (random per --seed). Ignored if --from-meta is set.")
     p.add_argument("--val-chars", type=str, default="KQXjz",
-                   help="String of held-out characters")
+                   help="String of held-out characters. Ignored if --from-meta is set.")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--from-meta", type=str, default="",
+                   help="Path to a split_meta.json — use its val_fonts and val_chars exactly, "
+                        "skipping random selection. Use this to reproduce a collaborator's split.")
     return p.parse_args()
 
 
@@ -59,16 +62,30 @@ def main() -> None:
     all_fonts: Set[str] = {r["font_name"] for r in rows}
     all_chars: Set[str] = {r["label_character"] for r in rows}
 
-    rng = random.Random(args.seed)
+    if args.from_meta:
+        with open(args.from_meta, encoding="utf-8") as f:
+            meta_src = json.load(f)
+        val_fonts = set(meta_src["val_fonts"]) & all_fonts
+        val_chars = set(meta_src["val_chars"]) & all_chars
+        missing_fonts = set(meta_src["val_fonts"]) - all_fonts
+        missing_chars_set = set(meta_src["val_chars"]) - all_chars
+        if missing_fonts:
+            print(f"warning: {len(missing_fonts)} val_fonts from meta not in this labels.csv — skipping:")
+            for f in sorted(missing_fonts):
+                print(f"  {f}")
+        if missing_chars_set:
+            print(f"warning: val_chars from meta not in dataset, skipping: {sorted(missing_chars_set)}")
+        print(f"Loaded split spec from {args.from_meta}: {len(val_fonts)} val_fonts, {len(val_chars)} val_chars")
+    else:
+        rng = random.Random(args.seed)
+        val_fonts_count = min(args.val_fonts, max(0, len(all_fonts) - 1))
+        val_fonts = set(rng.sample(sorted(all_fonts), val_fonts_count))
 
-    val_fonts_count = min(args.val_fonts, max(0, len(all_fonts) - 1))
-    val_fonts: Set[str] = set(rng.sample(sorted(all_fonts), val_fonts_count))
-
-    requested_val_chars = set(args.val_chars)
-    val_chars: Set[str] = requested_val_chars & all_chars
-    missing_chars = requested_val_chars - all_chars
-    if missing_chars:
-        print(f"warning: --val-chars contains chars not in dataset, skipping: {sorted(missing_chars)}")
+        requested_val_chars = set(args.val_chars)
+        val_chars = requested_val_chars & all_chars
+        missing_chars = requested_val_chars - all_chars
+        if missing_chars:
+            print(f"warning: --val-chars contains chars not in dataset, skipping: {sorted(missing_chars)}")
 
     buckets: Dict[str, List[Dict[str, str]]] = defaultdict(list)
     for r in rows:

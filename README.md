@@ -703,7 +703,180 @@ python inference.py \
 open /tmp/output/U+0048.png    # "H" rendered in the chosen handwriting style
 ```
 
-### 7.8 Diagram of training process
+### 7.8 Evaluation
+
+Run `evaluate.py` against all three validation splits using the EMA generator from a checkpoint.
+
+```bash
+python evaluate.py \
+  --checkpoint latest.pt \
+  --data-dir   data \
+  --out-dir    results \
+  --device     mps \
+  --batch-size 16
+```
+
+CUDA variant:
+
+```bash
+python evaluate.py \
+  --checkpoint runs/v2_unet/ckpt/latest.pt \
+  --data-dir   data \
+  --out-dir    results \
+  --device     cuda \
+  --batch-size 64
+```
+
+**Options:**
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--checkpoint` | `latest.pt` | Checkpoint file (must contain `G_ema` key) |
+| `--data-dir` | `data` | Directory with `labels_val_*.csv` split files |
+| `--out-dir` | `results` | Root output directory |
+| `--device` | auto-detect | `mps` / `cuda` / `cpu` |
+| `--batch-size` | 32 | Images per forward pass |
+| `--k-style` | 4 | Number of style reference images (must match training) |
+| `--grid-samples` | 16 | Columns in each visual grid |
+| `--per-font-top-n` | 20 | Fonts shown in per-font SSIM box plot |
+| `--save-images` | off | Write every generated PNG to `results/images/{split}/` |
+| `--splits` | all three | Override which splits to evaluate (space-separated stems) |
+
+**Artifacts produced** (all under `results/`):
+
+```
+results/
+├── metrics.json                  mean L1 / SSIM / VGG per split
+├── per_sample_metrics.csv        per-image L1, SSIM, VGG, font, char
+├── grids/
+│   ├── labels_val_unseen_font.png   visual grid: content | style ref | generated | GT
+│   ├── labels_val_unseen_char.png
+│   └── labels_val_unseen_both.png
+└── plots/
+    ├── metrics_bar.png            bar chart: all three metrics × all three splits
+    ├── score_hist.png             L1 / SSIM / VGG score distributions per split
+    ├── per_font_ssim.png          box plot of SSIM for the top-N fonts by sample count
+    └── l1_vs_ssim.png             scatter L1 vs SSIM coloured by split
+```
+
+**Interpreting results:**
+
+The three splits test different generalization axes:
+
+| Split | What is unseen | Measures |
+| --- | --- | --- |
+| `unseen_font` | Font (style) | Style generalization — can the model apply a new font style? |
+| `unseen_char` | Character (content) | Content generalization — can the model generate unseen glyphs? |
+| `unseen_both` | Font + character | Hardest combined test |
+
+`unseen_font` will score best (easy to interpolate seen characters in an unseen style).
+`unseen_both` will score worst — expected, not a model defect.
+
+---
+
+#### Results — `latest.pt`
+
+Evaluated on the shared split (`split_meta.json`, seed 42). Metrics are L1 pixel error, SSIM (structural similarity), and VGG perceptual distance — all computed on the EMA generator output vs ground truth at 128×128.
+
+**Summary:**
+
+| Split | n | L1 ↓ | SSIM ↑ | VGG ↓ |
+| --- | --- | --- | --- | --- |
+| Unseen Font | 1140 | 0.1137 | 0.8314 | 0.3712 |
+| Unseen Char | 740  | 0.1422 | 0.8123 | 0.4206 |
+| Unseen Both | 100  | 0.1536 | 0.7976 | 0.4392 |
+
+![Metrics bar chart](results/plots/metrics_bar.png)
+
+---
+
+**Score distributions:**
+
+| Split | SSIM std | SSIM min | SSIM max |
+| --- | --- | --- | --- |
+| Unseen Font | 0.063 | 0.549 | 0.977 |
+| Unseen Char | 0.060 | 0.418 | 0.925 |
+| Unseen Both | 0.060 | 0.587 | 0.914 |
+
+Across all 1980 samples: **3.7% score below SSIM 0.70** (hard failures), **7.5% score at or above 0.90** (near-perfect).
+
+![Score histograms](results/plots/score_hist.png)
+
+![L1 vs SSIM](results/plots/l1_vs_ssim.png)
+
+The L1–SSIM scatter shows the two metrics correlate tightly. The `unseen_font` cloud (blue) sits higher-right than the other two, confirming style generalization is easier than content generalization.
+
+---
+
+**SSIM degradation vs unseen_font baseline:**
+
+```
+unseen_font  →  unseen_char  :  −0.019   (content generalization cost)
+unseen_font  →  unseen_both  :  −0.034   (style + content combined)
+unseen_char  →  unseen_both  :  −0.015   (marginal cost of also unseen font)
+```
+
+The content gap (−0.019) is larger than the marginal font gap (−0.015), meaning unseen characters are the harder axis. The model transfers a seen style to a new character less reliably than it transfers a new style to a seen character.
+
+---
+
+**Per-character SSIM (held-out chars: K Q X j z):**
+
+| Char | SSIM | Notes |
+| --- | --- | --- |
+| `j` | 0.851 | Simple descender — shape consistent across fonts |
+| `X` | 0.837 | Symmetric diagonal strokes — predictable |
+| `z` | 0.820 | Mid-complexity |
+| `K` | 0.798 | Asymmetric branching arm — harder |
+| `Q` | 0.755 | Hardest — distinctive tail varies wildly between fonts |
+
+`Q` is the worst held-out character. Its tail/flourish is the most font-specific feature in the held-out set; the model produces a plausible `O`-like form but misses the tail in many fonts.
+
+![Unseen char grid](results/grids/labels_val_unseen_char.png)
+
+---
+
+**Per-font SSIM (top 20 fonts by sample count):**
+
+![Per-font SSIM](results/plots/per_font_ssim.png)
+
+Worst fonts are expressive handwriting or novelty display faces with irregular stroke widths:
+
+| Font | SSIM |
+| --- | --- |
+| RockSalt-Regular | 0.613 |
+| jsMath-cmex10 | 0.656 |
+| Ultra-Regular | 0.738 |
+| HomemadeApple-Regular | 0.739 |
+| CherryCreamSoda-Regular | 0.740 |
+
+Best fonts are clean geometric or condensed sans-serifs:
+
+| Font | SSIM |
+| --- | --- |
+| Agdasima-Regular | 0.890 |
+| AlegreyaSansSC-Thin | 0.883 |
+| AdventPro (variable) | 0.882 |
+| Abel-Regular | 0.880 |
+| OpenSansHebrewCondensed-Light | 0.872 |
+
+---
+
+**Visual grids — content \| style ref \| generated \| ground truth:**
+
+*Unseen Font* — model applies a never-seen font style to known characters. Quality is highest here.
+
+![Unseen font grid](results/grids/labels_val_unseen_font.png)
+
+*Unseen Both* — both font and character are unseen. Hardest setting; some characters lose fine details.
+
+![Unseen both grid](results/grids/labels_val_unseen_both.png)
+
+---
+
+**Takeaway:** Style generalization (unseen font) is strong at SSIM 0.831. Content generalization (unseen char) costs −0.019 SSIM. The main failure mode is decorative/handwriting fonts with irregular strokes — collecting more samples from those font families is the highest-leverage data improvement.
+
+### 7.9 Diagram of training process
 
 #### Data loading (per batch)
 
